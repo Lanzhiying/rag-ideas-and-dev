@@ -1,6 +1,14 @@
 # RAG 思路与开发实践
 
-> Retrieval-Augmented Generation — 从想法到落地，记录我的 RAG 探索历程。
+> 本地化 RAG 搭建过程中的想法、踩坑与思考记录。
+
+---
+
+## 🎯 项目定位
+
+这个仓库不是教程，也不是轮子——是我在**自己搭建本地 RAG 系统**过程中遇到的实际问题、产生的想法、做出的选择以及背后的思考。
+
+核心问题：**如何在本地环境（无云服务依赖）下，搭建一个可靠、好用的 RAG 系统？**
 
 ---
 
@@ -8,61 +16,58 @@
 
 ```
 .
-├── README.md              ← 项目总览（本文件）
-├── docs/                  ← 文档与笔记
-│   ├── concepts/          ← RAG 核心概念理解
-│   ├── pipeline/          ← 流水线设计思路
-│   └── experiments/       ← 实验记录
-├── code/                  ← 代码实现
-│   ├── ingestion/         ← 文档摄取 / 分块
-│   ├── embedding/         ← 向量化 / 索引
-│   ├── retrieval/         ← 检索策略
-│   └── generation/        ← 生成 / 后处理
-└── assets/                ← 图片、架构图
+├── README.md              ← 项目总览
+├── thoughts/              ← 零散想法与灵感
+├── decisions/             ← 关键决策记录（为什么选A不选B）
+├── pitfalls/              ← 踩坑记录（问题 + 原因 + 解法）
+├── drafts/                ← 草稿 / 半成品设计文档
+└── code/                  ← 实验代码（非生产级）
 ```
 
 ---
 
-## 🧭 思路路线图
+## 🧩 待探索的本地 RAG 问题
 
-- [ ] **Phase 1** — RAG 基础 pipeline 搭建（Naive RAG）
-  - 文档摄取 & 分块策略
-  - Embedding & 向量数据库选型
-  - 基础检索 + LLM 生成
-- [ ] **Phase 2** — 检索质量优化（Advanced RAG）
-  - 查询重写 / HyDE
-  - 多路召回 & 融合排序
-  - Chunk 大小与重叠实验
-- [ ] **Phase 3** — 进阶方向探索
-  - Agentic RAG（工具调用 / 路由）
-  - Graph RAG（知识图谱增强）
-  - Multi-modal RAG
+- [ ] **文档分块** — 中文文档怎么切？按段落、语义、还是固定长度？
+- [ ] **本地 Embedding** — 哪种模型在中文上好用？BGE、m3e、text2vec？
+- [ ] **本地向量库** — Chroma vs Qdrant vs FAISS？资源占用与查询速度
+- [ ] **检索策略** — 关键词 + 向量混合检索、重排序（本地 reranker）
+- [ ] **本地 LLM** — Ollama / llama.cpp / vLLM 的选择与调优
+- [ ] **上下文窗口** — 怎么分配检索结果和提示词的 token 预算？
+- [ ] **评估** — 没有标注数据的情况下，怎么判断 RAG 回答好不好？
 
 ---
 
-## 📝 核心想法记录
+## 📝 想法日志
 
-*等待填充 —— 我会持续在这里记录对 RAG 的理解、灵感与踩坑经验。*
-
----
-
-## ⚙️ 技术栈记录
-
-| 组件 | 选项 | 选择 | 原因 |
-|------|------|------|------|
-| LLM | OpenAI / Claude / 本地模型 | - | - |
-| Embedding | text-embedding-3 / bge / mxbai | - | - |
-| 向量库 | Chroma / Milvus / Qdrant / FAISS | - | - |
-| 框架 | LangChain / LlamaIndex / 自研 | - | - |
+*记录搭建过程中冒出的想法，无论是否可行。*
 
 ---
 
-## 📖 参考资源
+## ⚠️ 踩坑记录
 
-- [RAG Survey (Gao et al.)](https://arxiv.org/abs/2312.10997)
-- [LangChain RAG Docs](https://python.langchain.com/docs/tutorials/rag/)
-- [LlamaIndex RAG Guide](https://docs.llamaindex.ai/en/stable/understanding/rag/)
+*那些 Google 不到、只能靠 debug 发现的问题。*
 
 ---
 
-*持续更新中…*
+## 🔧 本地技术栈（演进中）
+
+| 环节 | 当前选择 | 备选 | 备注 |
+|------|----------|------|------|
+| LLM 推理 | - | Ollama / llama.cpp | |
+| Embedding | - | BGE-M3 / m3e-base | |
+| 向量库 | - | Chroma / Qdrant | |
+| 文档解析 | - | Unstructured / PyMuPDF | |
+| RAG 框架 | - | 自研 / LangChain | |
+
+---
+
+## 📖 参考
+
+- [BGE Embedding](https://huggingface.co/BAAI/bge-m3)
+- [Ollama](https://ollama.com/)
+- [Chroma](https://www.trychroma.com/)
+
+---
+
+*持续记录中，欢迎讨论。*
