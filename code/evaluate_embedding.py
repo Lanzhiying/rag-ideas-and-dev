@@ -1,98 +1,187 @@
 """
-Embedding 模型评估工具
+Embedding 模型评估工具（纯 CPU 版）
 
 用法：
-    python evaluate.py --model BAAI/bge-base-zh --task speed
-    python evaluate.py --model BAAI/bge-small-zh --task recall --testset data/test_queries.json
+    python evaluate_embedding.py --model BAAI/bge-small-zh-v1.5
+    python evaluate_embedding.py --model all           # 全部模型
+    python evaluate_embedding.py --model tier1         # 只测轻量级
 """
 
 import time
-import argparse
 import json
-import numpy as np
+import subprocess
+import platform
 from pathlib import Path
 
 
 # ============================================================
-# 1. 速度测试
+# 硬件检测
 # ============================================================
 
-def benchmark_speed(model_name: str, texts: list[str], device: str = "cpu"):
+def detect_hardware():
+    """检测 CPU/内存信息（Linux / WSL）。"""
+    info = {"platform": platform.platform(), "cpu_count": 1, "ram_gb": "?"}
+
+    try:
+        info["cpu_count"] = int(
+            subprocess.check_output("nproc", shell=True).decode().strip()
+        )
+    except Exception:
+        pass
+
+    try:
+        mem_bytes = int(
+            subprocess.check_output(
+                "free -b | grep Mem | awk '{print $2}'", shell=True
+            ).decode().strip()
+        )
+        info["ram_gb"] = round(mem_bytes / (1024**3), 1)
+    except Exception:
+        pass
+
+    try:
+        info["cpu_model"] = subprocess.check_output(
+            "lscpu | grep 'Model name' | cut -d: -f2", shell=True
+        ).decode().strip()
+    except Exception:
+        pass
+
+    return info
+
+
+# ============================================================
+# 模型分组
+# ============================================================
+
+TIER1_MODELS = [
+    "BAAI/bge-small-zh-v1.5",
+    "thenlper/gte-small",
+    "sentence-transformers/all-MiniLM-L6-v2",
+]
+
+TIER2_MODELS = [
+    "BAAI/bge-base-zh-v1.5",
+    "moka-ai/m3e-base",
+]
+
+ALL_MODELS = TIER1_MODELS + TIER2_MODELS + [
+    "BAAI/bge-large-zh-v1.5",
+    "BAAI/bge-m3",
+]
+
+
+# ============================================================
+# 测试文本
+# ============================================================
+
+TEST_TEXTS = [
+    # 中文（短）
+    "检索增强生成（RAG）是一种结合信息检索与文本生成的技术。",
+    "Embedding 模型将文本转换为高维向量，用于语义相似度计算。",
+    "本地部署大语言模型需要考虑显存、推理速度和并发能力。",
+    "RAGFlow 是一个开源的 RAG 引擎，支持多种文档格式的解析。",
+    "中文自然语言处理面临分词、语义理解和上下文建模等挑战。",
+    # 中文（中长）
+    "向量数据库如 Milvus、Qdrant 和 Chroma 常用于 RAG 系统的存储层，"
+    "它们提供高效的向量相似度搜索能力，支持 ANN 近似最近邻算法。",
+    "文档分块策略直接影响检索的粒度和召回质量。分块太大则语义噪声增加，"
+    "分块太小则上下文信息丢失，需要在两者之间找到平衡。",
+    "混合检索结合关键词匹配和语义搜索，兼顾精确性和泛化性。"
+    "BM25 适合精确匹配场景，而向量检索擅长捕获语义相似性。",
+    "模型量化（Quantization）可以在精度损失可控的前提下大幅降低资源消耗。"
+    "INT8 量化通常可以将模型体积减少 50%，推理速度提升 2-3 倍。",
+    "提示工程（Prompt Engineering）是优化 LLM 输出的关键技术。"
+    "通过精心设计的提示模板，可以引导模型产生更准确、更格式化的回答。",
+    # 英文
+    "Retrieval-Augmented Generation combines information retrieval with text generation.",
+    "Embedding models convert text into dense vector representations for semantic search.",
+    "Local LLM deployment requires careful consideration of VRAM and throughput constraints.",
+    "Vector databases store embeddings for efficient similarity search using ANN algorithms.",
+    "Document chunking strategy significantly impacts retrieval quality and token efficiency.",
+]
+
+
+# ============================================================
+# 1. 速度 + 内存测试
+# ============================================================
+
+def benchmark_model(model_name: str, texts: list[str], device: str = "cpu"):
     """
-    测试模型的推理速度。
+    测试单模型的推理速度和内存占用。
 
     Returns:
-        dict: {
-            "model": str,
-            "device": str,
-            "num_texts": int,
-            "total_time_sec": float,
-            "tokens_per_sec": float,
-            "texts_per_sec": float,
-        }
+        dict or None (如果加载失败)
     """
-    import time
+    import gc
     from sentence_transformers import SentenceTransformer
 
-    print(f"加载模型: {model_name} (device={device}) ...")
-    t0 = time.time()
-    model = SentenceTransformer(model_name, device=device)
-    load_time = time.time() - t0
-    print(f"  加载耗时: {load_time:.1f}s")
+    print(f"\n{'='*60}")
+    print(f"📦 {model_name}")
+    print(f"{'='*60}")
 
-    # Warm-up
+    # --- 加载 ---
+    print("  加载模型 ...", end=" ", flush=True)
+    t0 = time.time()
+    try:
+        model = SentenceTransformer(model_name, device=device)
+    except Exception as e:
+        print(f"❌ 失败: {e}")
+        return None
+    load_time = time.time() - t0
+
+    # 参数 & 内存
+    total_params = sum(p.numel() for p in model.parameters())
+    estimated_mb = (total_params * 4) / (1024 * 1024)
+
+    print(f"✅ {load_time:.1f}s | {total_params:,} params | ~{estimated_mb:.0f} MB")
+
+    # --- Warm-up ---
     _ = model.encode(["预热"], show_progress_bar=False)
 
-    # 正式测试
-    print(f"编码 {len(texts)} 条文本 ...")
+    # --- 速度测试 ---
+    print(f"  编码 {len(texts)} 条 ...", end=" ", flush=True)
     t0 = time.time()
-    embeddings = model.encode(texts, show_progress_bar=True)
+    embeddings = model.encode(texts, show_progress_bar=False)
     encode_time = time.time() - t0
 
     total_chars = sum(len(t) for t in texts)
+
     result = {
         "model": model_name,
         "device": device,
-        "num_texts": len(texts),
-        "total_chars": total_chars,
         "load_time_sec": round(load_time, 2),
         "encode_time_sec": round(encode_time, 2),
-        "texts_per_sec": round(len(texts) / encode_time, 2),
-        "chars_per_sec": round(total_chars / encode_time, 2),
+        "total_time_sec": round(load_time + encode_time, 2),
+        "num_texts": len(texts),
+        "texts_per_sec": round(len(texts) / encode_time, 2) if encode_time > 0 else 0,
+        "chars_per_sec": round(total_chars / encode_time, 2) if encode_time > 0 else 0,
         "embedding_dim": embeddings.shape[1],
+        "total_params": total_params,
+        "estimated_size_mb": round(estimated_mb, 1),
     }
+
+    # 清理内存
+    del model, embeddings
+    gc.collect()
+
     return result
 
 
 # ============================================================
-# 2. 检索精度测试（简化版）
+# 2. 检索精度测试
 # ============================================================
 
-def benchmark_recall(
-    model_name: str,
-    testset: list[dict],
-    device: str = "cpu",
-    top_k: int = 5,
-):
-    """
-    简化版召回率测试：
-    testset = [
-        {"query": "...", "relevant_chunks": [0, 3, 7]},
-        ...
-    ]
-
-    对每个 query，计算其 embedding 后与所有 chunks 的余弦相似度，
-    取 top_k，看在 relevant_chunks 中的命中率。
-    """
+def benchmark_recall(model_name: str, testset: list[dict], device: str = "cpu", top_k: int = 5):
+    """简化版 Recall@K 测试。"""
     from sentence_transformers import SentenceTransformer
     from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
 
-    # 收集所有 unique chunks
     all_chunks = []
     queries = []
-    relevance_map = []  # list of (query_idx, relevant_chunk_indices)
-
+    relevance_map = []
     chunk_to_id = {}
+
     for item in testset:
         queries.append(item["query"])
         rel_ids = []
@@ -103,130 +192,67 @@ def benchmark_recall(
             rel_ids.append(chunk_to_id[chunk_text])
         relevance_map.append(rel_ids)
 
-    print(f"加载模型: {model_name} (device={device}) ...")
     model = SentenceTransformer(model_name, device=device)
+    query_embs = model.encode(queries, show_progress_bar=False)
+    chunk_embs = model.encode(all_chunks, show_progress_bar=False)
 
-    print(f"编码 {len(queries)} 条 query ...")
-    query_embs = model.encode(queries, show_progress_bar=True)
-
-    print(f"编码 {len(all_chunks)} 条 chunk ...")
-    chunk_embs = model.encode(all_chunks, show_progress_bar=True)
-
-    # 计算相似度 & Recall
     sim_matrix = cosine_similarity(query_embs, chunk_embs)
-
     recalls = []
     for i, rel_ids in enumerate(relevance_map):
         ranked = np.argsort(sim_matrix[i])[::-1][:top_k]
         hits = len(set(ranked) & set(rel_ids))
-        recall = hits / len(rel_ids) if rel_ids else 0
-        recalls.append(recall)
+        recalls.append(hits / len(rel_ids))
 
-    result = {
+    return {
         "model": model_name,
         "num_queries": len(queries),
         "num_chunks": len(all_chunks),
         "top_k": top_k,
         "mean_recall": round(np.mean(recalls), 4),
-        "recall_std": round(np.std(recalls), 4),
-    }
-    return result
-
-
-# ============================================================
-# 3. 内存占用
-# ============================================================
-
-def benchmark_memory(model_name: str, device: str = "cpu"):
-    """估算模型内存占用。"""
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(model_name, device=device)
-    total_params = sum(p.numel() for p in model.parameters())
-    # 粗略估算：float32 = 4 bytes per param
-    estimated_mb = (total_params * 4) / (1024 * 1024)
-
-    return {
-        "model": model_name,
-        "total_params": total_params,
-        "estimated_size_mb": round(estimated_mb, 1),
     }
 
 
 # ============================================================
-# 预置测试文本
+# 批量对比
 # ============================================================
 
-TEST_TEXTS_ZH = [
-    "检索增强生成（RAG）是一种结合信息检索与文本生成的技术。",
-    "Embedding 模型将文本转换为高维向量，用于语义相似度计算。",
-    "本地部署大语言模型需要考虑显存、推理速度和并发能力。",
-    "RAGFlow 是一个开源的 RAG 引擎，支持多种文档格式的解析。",
-    "中文自然语言处理面临分词、语义理解和上下文建模等挑战。",
-    "向量数据库如 Milvus、Qdrant 和 Chroma 常用于 RAG 系统的存储层。",
-    "提示工程（Prompt Engineering）是优化 LLM 输出的关键技术。",
-    "文档分块策略直接影响检索的粒度和召回质量。",
-    "混合检索结合关键词匹配和语义搜索，兼顾精确性和泛化性。",
-    "模型量化（Quantization）可以在精度损失可控的前提下大幅降低资源消耗。",
-]
-
-TEST_TEXTS_EN = [
-    "Retrieval-Augmented Generation combines information retrieval with text generation.",
-    "Embedding models convert text into dense vector representations.",
-    "Local LLM deployment requires careful consideration of VRAM and throughput.",
-    "Vector databases store embeddings for efficient similarity search.",
-    "Document chunking strategy significantly impacts retrieval quality.",
-]
-
-
-# ============================================================
-# 多模型对比入口
-# ============================================================
-
-MODEL_LIST = [
-    "BAAI/bge-small-zh-v1.5",
-    "BAAI/bge-base-zh-v1.5",
-    "BAAI/bge-large-zh-v1.5",
-    "BAAI/bge-m3",
-    "moka-ai/m3e-base",
-    "sentence-transformers/all-MiniLM-L6-v2",
-    "thenlper/gte-small",
-]
-
-
-def run_full_benchmark(
-    models: list[str] | None = None,
-    device: str = "cpu",
-    texts: list[str] | None = None,
-):
-    """运行全量速度 + 内存测试，输出对比表。"""
-    if models is None:
-        models = MODEL_LIST
+def run_comparison(models: list[str], texts: list[str] = None, device: str = "cpu"):
+    """运行多个模型的速度 + 内存对比。"""
     if texts is None:
-        texts = TEST_TEXTS_ZH + TEST_TEXTS_EN
+        texts = TEST_TEXTS
+
+    # 硬件信息
+    hw = detect_hardware()
+    print(f"🖥️  硬件: {hw.get('cpu_model', '?')} | {hw['cpu_count']} 核 | {hw['ram_gb']} GB RAM")
+    print(f"📝 测试文本: {len(texts)} 条\n")
 
     results = []
-    for m in models:
-        try:
-            speed = benchmark_speed(m, texts, device)
-            mem = benchmark_memory(m, device)
-            results.append({**speed, **mem})
-            print(f"  ✅ {m}")
-        except Exception as e:
-            print(f"  ❌ {m}: {e}")
+    for i, m in enumerate(models):
+        print(f"[{i+1}/{len(models)}]", end="")
+        r = benchmark_model(m, texts, device)
+        if r:
+            results.append(r)
 
-    # 打印对比表
-    print("\n" + "=" * 90)
-    print(f"{'模型':<35} {'维度':>5} {'大小MB':>8} {'条/秒':>8} {'字/秒':>10} {'参数':>10}")
-    print("-" * 90)
-    for r in sorted(results, key=lambda x: x.get("texts_per_sec", 0), reverse=True):
+    if not results:
+        print("\n❌ 没有成功测试的模型")
+        return []
+
+    # --- 打印对比表 ---
+    print("\n" + "=" * 100)
+    print(f"{'模型':<38} {'维度':>5} {'大小MB':>7} {'加载s':>6} {'编码s':>7} {'条/秒':>7} {'字/秒':>9}")
+    print("-" * 100)
+
+    sorted_results = sorted(results, key=lambda x: x["texts_per_sec"], reverse=True)
+    for r in sorted_results:
         print(
-            f"{r['model']:<35} {r.get('embedding_dim', '?'):>5} "
-            f"{r.get('estimated_size_mb', 0):>8.1f} {r['texts_per_sec']:>8.1f} "
-            f"{r['chars_per_sec']:>10.1f} {r['total_params']:>10,}"
+            f"{r['model']:<38} {r['embedding_dim']:>5} {r['estimated_size_mb']:>7.1f} "
+            f"{r['load_time_sec']:>6.1f} {r['encode_time_sec']:>7.2f} "
+            f"{r['texts_per_sec']:>7.2f} {r['chars_per_sec']:>9.0f}"
         )
 
-    return results
+    print("=" * 100)
+
+    return sorted_results
 
 
 # ============================================================
@@ -234,29 +260,28 @@ def run_full_benchmark(
 # ============================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Embedding 模型评估")
-    parser.add_argument("--model", type=str, help="单个模型名称或 'all'")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Embedding 模型评估（纯 CPU）")
+    parser.add_argument("--model", type=str, default="tier1",
+                        help="模型名 / 'tier1' / 'tier2' / 'all'")
     parser.add_argument("--task", type=str, default="speed",
-                        choices=["speed", "memory", "recall", "all"])
-    parser.add_argument("--device", type=str, default="cpu",
-                        help="cpu / cuda / mps")
-    parser.add_argument("--output", type=str, help="输出 JSON 文件路径")
+                        choices=["speed", "recall"])
+    parser.add_argument("--output", type=str, help="保存 JSON 结果")
     args = parser.parse_args()
 
-    if args.model == "all" or not args.model:
-        run_full_benchmark(device=args.device)
-    else:
-        if args.task == "speed":
-            result = benchmark_speed(args.model, TEST_TEXTS_ZH + TEST_TEXTS_EN, args.device)
-        elif args.task == "memory":
-            result = benchmark_memory(args.model, args.device)
-        else:
-            result = run_full_benchmark([args.model], device=args.device)
+    # 选择模型列表
+    model_map = {
+        "tier1": TIER1_MODELS,
+        "tier2": TIER2_MODELS,
+        "all": ALL_MODELS,
+    }
+    selected = model_map.get(args.model, [args.model])
 
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+    results = run_comparison(selected)
 
-    if args.output:
+    if args.output and results:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         with open(args.output, "w") as f:
-            json.dump(result if isinstance(result, dict) else result, f, indent=2, ensure_ascii=False)
-        print(f"\n结果已保存到 {args.output}")
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"\n📁 结果已保存: {args.output}")
