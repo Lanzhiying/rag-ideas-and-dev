@@ -373,17 +373,14 @@ def upload_to_ragflow(csv_path: Path, kb_name: str):
             })
             kb_id = resp.json().get("data", {}).get("id")
         else:
-            # 清空知识库中的旧文件，避免重复
-            resp = session.get(f"{ragflow_url}/api/v1/datasets/{kb_id}/documents")
-            doc_data = resp.json().get("data", {})
-            docs = doc_data.get("docs", []) if isinstance(doc_data, dict) else doc_data if isinstance(doc_data, list) else []
-            for doc in docs:
-                doc_id = doc.get("id")
-                if doc_id:
-                    session.delete(f"{ragflow_url}/api/v1/datasets/{kb_id}/documents/{doc_id}")
-            deleted = len(docs)
-            if deleted:
-                logger.info(f"已清理旧文件: {deleted} 个")
+            # 重建知识库：删除旧的重新创建（API不支持单文件删除）
+            logger.info(f"重建知识库: {kb_name}")
+            session.delete(f"{ragflow_url}/api/v1/datasets/{kb_id}")
+            resp = session.post(f"{ragflow_url}/api/v1/datasets", json={
+                "name": kb_name,
+                "chunk_method": "laws",
+            })
+            kb_id = resp.json().get("data", {}).get("id")
 
         if not kb_id:
             logger.error("无法创建知识库")
@@ -439,36 +436,78 @@ def main():
     # 拉取新闻稿（仅一次，所有数据源共享）
     press_map = fetch_press_releases()
 
+    # 按知识库分组上传，避免重复重建
+    kb_groups: dict[str, list[str]] = {}
     for source_id in targets:
         if source_id not in SOURCES:
             continue
+        kb = SOURCES[source_id]["kb_name"]
+        kb_groups.setdefault(kb, []).append(source_id)
 
+    for kb_name, group in kb_groups.items():
         logger.info(f"\n{'='*60}")
-        logger.info(f"处理: {SOURCES[source_id]['title']}")
+        logger.info(f"知识库: {kb_name} ({', '.join(group)})")
         logger.info(f"{'='*60}")
 
-        entities = fetch_sanctions(source_id)
-        if not entities:
-            logger.warning(f"{source_id}: 未获取到数据，跳过")
+        csv_paths = []
+        for source_id in group:
+            entities = fetch_sanctions(source_id)
+            if not entities:
+                logger.warning(f"{source_id}: 未获取到数据，跳过")
+                continue
+
+            records = [extract_fields(e, source_id) for e in entities]
+            records = [r for r in records if r["实体名称"]]
+            records = match_reasons(records, press_map)
+
+            timestamp = datetime.now().strftime("%Y%m%d")
+            csv_path = DATA_DIR / f"sanctions_{source_id}.csv"
+            export_csv(records, csv_path)
+            csv_paths.append((source_id, csv_path))
+
+        if not csv_paths:
             continue
 
-        # 提取字段
-        records = [extract_fields(e, source_id) for e in entities]
-        records = [r for r in records if r["实体名称"]]
+        # 查找知识库，不存在则创建
+        ragflow_url = os.environ.get("RAGFLOW_URL", "http://ragflow:9380")
+        api_key = os.environ.get("RAGFLOW_API_KEY", "")
+        if not api_key:
+            logger.warning("RAGFLOW_API_KEY 未配置，跳过入库")
+            continue
 
-        # 匹配制裁原因
-        records = match_reasons(records, press_map)
+        session = requests.Session()
+        session.headers.update({"Authorization": f"Bearer {api_key}"})
 
-        # 导出
-        timestamp = datetime.now().strftime("%Y%m%d")
-        csv_path = DATA_DIR / f"sanctions_{source_id}_{timestamp}.csv"
-        export_csv(records, csv_path)
+        resp = session.get(f"{ragflow_url}/api/v1/datasets")
+        kb_id = None
+        for ds in resp.json().get("data", []):
+            if ds.get("name") == kb_name:
+                kb_id = ds.get("id")
+                break
+        if not kb_id:
+            resp = session.post(f"{ragflow_url}/api/v1/datasets", json={
+                "name": kb_name,
+                "chunk_method": "laws",
+            })
+            kb_id = resp.json().get("data", {}).get("id")
+            if not kb_id:
+                logger.error(f"无法创建知识库: {kb_name}")
+                continue
 
-        # 入库
-        kb_name = SOURCES[source_id]["kb_name"]
-        upload_to_ragflow(csv_path, kb_name)
+        # 上传所有文件
+        for source_id, csv_path in csv_paths:
+            with open(csv_path, "rb") as f:
+                resp = session.post(
+                    f"{ragflow_url}/api/v1/datasets/{kb_id}/documents",
+                    files={"file": (csv_path.name, f, "text/csv")},
+                )
+            label = SOURCES[source_id]["title"]
+            if resp.status_code in (200, 201):
+                logger.info(f"✓ [{label}] 上传成功")
+            else:
+                logger.error(f"✗ [{label}] 上传失败: {resp.status_code}")
 
-        time.sleep(1)  # 避免 API 限流
+        time.sleep(1)
 
 
 if __name__ == "__main__":
