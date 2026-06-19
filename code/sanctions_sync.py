@@ -369,7 +369,7 @@ def upload_to_ragflow(csv_path: Path, kb_name: str):
         if not kb_id:
             resp = session.post(f"{ragflow_url}/api/v1/datasets", json={
                 "name": kb_name,
-                "parser_id": "laws",
+                "chunk_method": "laws",
             })
             kb_id = resp.json().get("data", {}).get("id")
 
