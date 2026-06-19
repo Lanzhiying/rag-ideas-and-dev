@@ -372,6 +372,18 @@ def upload_to_ragflow(csv_path: Path, kb_name: str):
                 "chunk_method": "laws",
             })
             kb_id = resp.json().get("data", {}).get("id")
+        else:
+            # 清空知识库中的旧文件，避免重复
+            resp = session.get(f"{ragflow_url}/api/v1/datasets/{kb_id}/documents")
+            doc_data = resp.json().get("data", {})
+            docs = doc_data.get("docs", []) if isinstance(doc_data, dict) else doc_data if isinstance(doc_data, list) else []
+            for doc in docs:
+                doc_id = doc.get("id")
+                if doc_id:
+                    session.delete(f"{ragflow_url}/api/v1/datasets/{kb_id}/documents/{doc_id}")
+            deleted = len(docs)
+            if deleted:
+                logger.info(f"已清理旧文件: {deleted} 个")
 
         if not kb_id:
             logger.error("无法创建知识库")
