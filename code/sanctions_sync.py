@@ -461,7 +461,8 @@ def main():
             records = match_reasons(records, press_map)
 
             timestamp = datetime.now().strftime("%Y%m%d")
-            csv_path = DATA_DIR / f"sanctions_{source_id}.csv"
+            today = datetime.now().strftime("%Y%m%d")
+            csv_path = DATA_DIR / f"sanctions_{source_id}_{today}.csv"
             export_csv(records, csv_path)
             csv_paths.append((source_id, csv_path))
 
