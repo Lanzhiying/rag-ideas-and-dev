@@ -20,31 +20,40 @@
 
 ---
 
-## 我现在在纠结什么
+## 当前进展
 
-- 中文文档怎么切？按段落、按语义、还是固定长度——试了几种都不太满意
-- 本地 Embedding 模型到底选哪个？CPU 上跑得太慢了，bge-small 凑合但不知道精度差了多少
-- 向量库 Chroma、Qdrant、FAISS 三个都摸了一遍，各有各的烦人之处
-- 检索策略要不要上混合？加了关键词匹配会不会反而把结果搞乱了
-- 本地 LLM 用 Ollama 还是 llama.cpp？7B 模型在我的 CPU 上回答一个问题要半分钟，能忍吗
-- 怎么评估 RAG 输出好不好——没有标注数据，总不能全靠感觉
+**已完成：**
+- RAGFlow v0.26.1 Docker 部署（Docker Desktop WSL2）
+- 研发中心知识库搭建（19 个知识库，按组分类：研发/技服/实验室）
+- 标准资料整理（ISO 6743 全套 + DIN/API/AGMA/ASTM/GB 清单）
+- 定时同步脚本（每天 02:00 自动扫描共享文件夹）
+- Embedding 模型选型完成 → **Qwen3-Embedding-0.6B**（具体看 `decisions/embedding-model-selection.md`）
+
+**待做：**
+- 切默认 embedding 到 Qwen3-0.6B（本地，替代 ZHIPU 云端 API）
+- 生产中心 / 运营中心 / 行政财务 的知识库搭建
+- 多部门权限隔离的入口页面
+- 服务器部署迁移
+- 钉钉 / 其他渠道集成
 
 ---
 
-## 技术栈（还在试）
+## 技术栈
 
-| 环节 | 当前在用的 | 也试过的 |
-|------|-----------|---------|
-| LLM 推理 | Ollama (qwen2:7b) | llama.cpp |
-| Embedding | 待定，正在测 | BGE 全家桶、m3e、gte-small |
-| 向量库 | Chroma（因为简单） | Qdrant、FAISS |
-| 文档解析 | PyMuPDF | Unstructured |
-| RAG 框架 | RAGFlow | 自己拼 |
+| 环节 | 当前方案 |
+|------|---------|
+| RAG 引擎 | RAGFlow v0.26.1 |
+| LLM | DeepSeek v4（API，问复杂问题用） |
+| Embedding | **Qwen3-Embedding-0.6B**（决定切，目前在 ZHIPU） |
+| 搜索引擎 | SearXNG（自建，内网隔离） |
+| 入口 | QQ 机器人（测试中）+ Web 页面（规划中） |
+| 同步 | Python 脚本 + Windows 任务计划 |
+| 数据安全 | 全本地，配方数据不出服务器 |
 
 ---
 
 ## 参考
 
-- [BGE Embedding](https://huggingface.co/BAAI/bge-m3)
-- [Ollama](https://ollama.com/)
-- [Chroma](https://www.trychroma.com/)
+- [RAGFlow](https://github.com/infiniflow/ragflow)
+- [SearXNG](https://docs.searxng.org/)
+- [Qwen3-Embedding](https://github.com/QwenLM/Qwen3-Embedding)
